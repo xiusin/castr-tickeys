@@ -19,6 +19,7 @@ func init() {
 	logger.SetOutput(f)
 	logger.SetLogLevel(logger.DebugLevel)
 	logger.SetReportCaller(true)
+	logger.DisableColor = true
 	rand.Seed(time.Now().UnixNano())
 }
 

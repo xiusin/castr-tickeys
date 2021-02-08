@@ -2,7 +2,9 @@ package components
 
 import (
 	"fmt"
+	"github.com/xiusin/castr-tickeys/helper"
 	"github.com/xiusin/castr-tickeys/sound"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -240,7 +242,7 @@ func InitKeyboard(app *widgets.QApplication) *keyBoardListener { //, win *widget
 		keyboardListenerInstance.keyCodeMapKeyChar = map[uint16]string{}
 		keyboardListenerInstance.ModifierMapping = map[string]bool{}
 
-		keyboardListenerInstance.timer = time.AfterFunc(2000*time.Millisecond, func() {
+		keyboardListenerInstance.timer = time.AfterFunc(time.Duration(helper.GetConf().Delay)*time.Millisecond, func() {
 			keyboardListenerInstance.Lock()
 			defer keyboardListenerInstance.Unlock()
 			keyboardListenerInstance.keyStringBuf.Reset() // 清空内容
@@ -253,19 +255,35 @@ func InitKeyboard(app *widgets.QApplication) *keyBoardListener { //, win *widget
 
 		keyboardListenerInstance.globalLabel = widgets.NewQLabel(nil, core.Qt__FramelessWindowHint|core.Qt__WindowStaysOnTopHint)
 		keyboardListenerInstance.globalLabel.SetScaledContents(true)
-		keyboardListenerInstance.globalLabel.SetStyleSheet("QLabel{ color: #fff; border: 2px solid #fff; border-radius: 0px; background: rgba(0,0,0,0.4); font-size: 30px; }")
-		keyboardListenerInstance.globalLabel.SetGeometry2(15, app.PrimaryScreen().AvailableSize().Height()-35, 0, 0)
+		keyboardListenerInstance.globalLabel.SetStyleSheet("QLabel{ " + helper.GetConf().Style + " }")
+
+		// 刷新位置
+		y := helper.GetConf().Pos[1]
+
+		var getX = func(labelWidth int) int {
+			x := helper.GetConf().Pos[0]
+			if x < 0 {
+				x = app.PrimaryScreen().Size().Width() - labelWidth + x
+			}
+			return x
+		}
+
+		if y < 0 {
+			y = app.PrimaryScreen().Size().Height() + y
+		}
+
+		keyboardListenerInstance.globalLabel.SetGeometry2(getX(0), y, 0, 0)
 
 		for s, v := range hook.Keycode {
 			keyboardListenerInstance.keyCodeMapKeyChar[v] = s
 		}
-		streams := sound.InitStreamer() // player, soundData :=
+		streams := sound.InitStreamer()
 		go func() {
 			s := hook.Start()
 			for ev := range s {
 				var kc string
-
 				var code int
+				soundData, ok := streams.Modifiers[strconv.Itoa(int(ev.Rawcode))]
 				if ev.Keychar != 65535 {
 					code = int(ev.Keychar)
 					kc = string(ev.Keychar)
@@ -273,8 +291,9 @@ func InitKeyboard(app *widgets.QApplication) *keyBoardListener { //, win *widget
 					code = int(ev.Keycode)
 					kc = keyboardListenerInstance.keyCodeMapKeyChar[ev.Keycode]
 				}
-				soundData := streams.Sounds[(code % sound.GetSoundConf().NonUniqueCount)]
-
+				if !ok {
+					soundData = streams.Sounds[(code % sound.GetSoundConf().NonUniqueCount)]
+				}
 				if ev.Kind == hook.KeyUp {
 					delete(keyboardListenerInstance.ModifierMapping, kc)
 				} else if ev.Kind == hook.KeyHold { // ev.Kind == hook.KeyHold || 修饰键用keyHold
@@ -298,7 +317,7 @@ func InitKeyboard(app *widgets.QApplication) *keyBoardListener { //, win *widget
 								}
 							}
 						}
-						keyboardListenerInstance.timer.Reset(2000 * time.Millisecond)
+						keyboardListenerInstance.timer.Reset(time.Duration(helper.GetConf().Delay) * time.Millisecond)
 						keyboardListenerInstance.keyStringBuf.WriteString(keyChar)
 					}(kc)
 				}
@@ -306,11 +325,11 @@ func InitKeyboard(app *widgets.QApplication) *keyBoardListener { //, win *widget
 			<-hook.Process(s)
 		}()
 
-		qtimer := core.NewQTimer(nil)
+		timer := core.NewQTimer(nil)
 
 		var prevWidth, prevHeight int
 
-		qtimer.ConnectTimeout(func() {
+		timer.ConnectTimeout(func() {
 			if keyboardListenerInstance.keyStringBuf.Len() == 0 {
 				prevHeight, prevWidth = 0, 0
 				win.Hide()
@@ -329,9 +348,11 @@ func InitKeyboard(app *widgets.QApplication) *keyBoardListener { //, win *widget
 			}
 			prevWidth, prevHeight = w, h
 			win.SetFixedSize2(w, h)
+			//fmt.Println(getX(w), y, w, h)
+			//win.SetGeometry2(getX(w), y, w, h)
 		})
-		qtimer.SetInterval(50)
-		qtimer.Start2()
+		timer.SetInterval(50)
+		timer.Start2()
 	})
 	return keyboardListenerInstance
 }

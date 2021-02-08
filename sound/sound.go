@@ -31,7 +31,6 @@ var sound ConfItem
 func init() {
 	_ = json.Unmarshal(confJson(), &schemes)
 	sound = schemes[0]
-	// 根据音乐选择目录选择对应的
 	for _, v := range schemes {
 		if helper.GetConf().SoundType == v.Name {
 			sound = v
@@ -51,7 +50,6 @@ func InitStreamer() struct {
 } {
 	soundDir := helper.AppDirPath("../Resources/sounds/" + sound.Name)
 	//soundDir := "/Users/xiusin/projects/src/github.com/xiusin/castr-tickeys/sounds/" + sound.Name
-	// 记录音乐条数
 	var sounds [][]byte
 	var modifiers = map[string][]byte{}
 	for idx, soundFile := range sound.Files {
