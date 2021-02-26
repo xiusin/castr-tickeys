@@ -2,8 +2,10 @@ package components
 
 import (
 	"fmt"
+	"github.com/therecipe/qt/gui"
 	"github.com/xiusin/castr-tickeys/helper"
 	"github.com/xiusin/castr-tickeys/sound"
+	"math"
 	"strconv"
 	"strings"
 	"sync"
@@ -218,15 +220,22 @@ var raw2key = map[uint16]string{ // https://github.com/wesbos/keycodes
 }
 
 type keyBoardListener struct {
-	globalLabel     *widgets.QLabel
 	timer           *time.Timer
 	prevEnterTime   map[string]time.Time
 	ModifierMapping map[string]bool
 	sync.Mutex
 	sync.Once
 	keyCodeMapKeyChar map[uint16]string
-	win               *widgets.QMainWindow
 	keyStringBuf      strings.Builder
+	labels            sync.Pool
+	blurLabels        struct {
+		labels []*struct {
+			timer *time.Timer
+			label *widgets.QLabel
+		}
+		locker sync.RWMutex
+	} // 失去焦点的节点,隐藏以后丢入labels,并删除元素
+	activeLabel *widgets.QLabel // 当前激活的label
 }
 
 var keyboardListenerInstance = &keyBoardListener{}
@@ -242,6 +251,51 @@ func InitKeyboard(app *widgets.QApplication) *keyBoardListener { //, win *widget
 		keyboardListenerInstance.keyCodeMapKeyChar = map[uint16]string{}
 		keyboardListenerInstance.ModifierMapping = map[string]bool{}
 
+		var getX = func(labelWidth int) int {
+			x := helper.GetConf().Pos[0]
+			if x < 0 {
+				x = app.PrimaryScreen().Size().Width() - labelWidth + x
+			}
+			return x
+		}
+
+		var resetQLabel = func(label *widgets.QLabel) {
+			keyboardListenerInstance.blurLabels.locker.Lock()
+			if label != keyboardListenerInstance.activeLabel {
+				for idx, v := range keyboardListenerInstance.blurLabels.labels {
+					if v.label == label {
+						keyboardListenerInstance.blurLabels.labels = append(
+							keyboardListenerInstance.blurLabels.labels[:idx],
+							keyboardListenerInstance.blurLabels.labels[idx+1:]...)
+						break
+					}
+				}
+				label.Hide()
+				label.Close()
+				label.DestroyQLabel()
+				//keyboardListenerInstance.labels.Put(label) // 节点入队
+			}
+			keyboardListenerInstance.blurLabels.locker.Unlock()
+		}
+
+		keyboardListenerInstance.labels = sync.Pool{New: func() interface{} {
+			label := widgets.NewQLabel(nil, core.Qt__FramelessWindowHint|core.Qt__WindowStaysOnTopHint)
+
+			// 标签双击事件
+			label.ConnectMouseDoubleClickEvent(func(event *gui.QMouseEvent) {
+				resetQLabel(label)
+			})
+
+			label.SetScaledContents(true)
+			label.SetStyleSheet("QLabel{ " + helper.GetConf().Style + " }")
+			y := helper.GetConf().Pos[1]
+			if y < 0 {
+				y = app.PrimaryScreen().Size().Height() + y
+			}
+			label.SetGeometry2(getX(0), y, 0, 0)
+			return label
+		}}
+
 		keyboardListenerInstance.timer = time.AfterFunc(time.Duration(helper.GetConf().Delay)*time.Millisecond, func() {
 			keyboardListenerInstance.Lock()
 			defer keyboardListenerInstance.Unlock()
@@ -252,28 +306,7 @@ func InitKeyboard(app *widgets.QApplication) *keyBoardListener { //, win *widget
 		win.SetVisible(true)
 		win.SetAttribute(core.Qt__WA_TranslucentBackground, true)
 		win.SetAutoFillBackground(false)
-
-		keyboardListenerInstance.globalLabel = widgets.NewQLabel(nil, core.Qt__FramelessWindowHint|core.Qt__WindowStaysOnTopHint)
-		keyboardListenerInstance.globalLabel.SetScaledContents(true)
-		keyboardListenerInstance.globalLabel.SetStyleSheet("QLabel{ " + helper.GetConf().Style + " }")
-
-		// 刷新位置
-		y := helper.GetConf().Pos[1]
-
-		var getX = func(labelWidth int) int {
-			x := helper.GetConf().Pos[0]
-			if x < 0 {
-				x = app.PrimaryScreen().Size().Width() - labelWidth + x
-			}
-			return x
-		}
-
-		if y < 0 {
-			y = app.PrimaryScreen().Size().Height() + y
-		}
-
-		keyboardListenerInstance.globalLabel.SetGeometry2(getX(0), y, 0, 0)
-
+		keyboardListenerInstance.activeLabel = keyboardListenerInstance.labels.Get().(*widgets.QLabel)
 		for s, v := range hook.Keycode {
 			keyboardListenerInstance.keyCodeMapKeyChar[v] = s
 		}
@@ -281,10 +314,13 @@ func InitKeyboard(app *widgets.QApplication) *keyBoardListener { //, win *widget
 		go func() {
 			s := hook.Start()
 			for ev := range s {
+				if ev.Kind == hook.MouseMove {
+					continue
+				}
 				var kc string
 				var code int
 				soundData, ok := streams.Modifiers[strconv.Itoa(int(ev.Rawcode))]
-				if ev.Keychar != 65535 {
+				if ev.Keychar != math.MaxInt16 {
 					code = int(ev.Keychar)
 					kc = string(ev.Keychar)
 				} else {
@@ -313,7 +349,7 @@ func InitKeyboard(app *widgets.QApplication) *keyBoardListener { //, win *widget
 								keyChar = t
 							} else {
 								if keyChar == "space" {
-									keyChar = " "
+									keyChar = "_"
 								}
 							}
 						}
@@ -330,26 +366,66 @@ func InitKeyboard(app *widgets.QApplication) *keyBoardListener { //, win *widget
 		var prevWidth, prevHeight int
 
 		timer.ConnectTimeout(func() {
-			if keyboardListenerInstance.keyStringBuf.Len() == 0 {
+			if keyboardListenerInstance.keyStringBuf.Len() == 0 && len(keyboardListenerInstance.prevEnterTime) > 0 {
+				keyboardListenerInstance.prevEnterTime = map[string]time.Time{}
+				keyboardListenerInstance.blurLabels.locker.Lock()
 				prevHeight, prevWidth = 0, 0
-				win.Hide()
-				keyboardListenerInstance.globalLabel.Hide()
+				var isExists bool
+				// 找一下节点是否已经存在
+				for _, v := range keyboardListenerInstance.blurLabels.labels {
+					if v.label == keyboardListenerInstance.activeLabel {
+						isExists = true
+						break
+					}
+				}
+
+				if !isExists {
+					lab := keyboardListenerInstance.activeLabel
+					keyboardListenerInstance.blurLabels.labels = append(
+						keyboardListenerInstance.blurLabels.labels,
+						&struct {
+							timer *time.Timer
+							label *widgets.QLabel
+						}{label: lab})
+					go func() {
+						time.AfterFunc(time.Duration(3000)*time.Millisecond, func() {
+							resetQLabel(lab)
+						})
+					}()
+					//fmt.Printf("节点信息: %+v \n", keyboardListenerInstance.blurLabels.labels)
+				}
+				// 上移节点
+				for k := 0; k < len(keyboardListenerInstance.blurLabels.labels); k++ {
+					v := keyboardListenerInstance.blurLabels.labels[k]
+					if v.label != nil {
+						y := helper.GetConf().Pos[1] - (k+1)*50
+						if y < 0 {
+							y = app.PrimaryScreen().Size().Height() + y
+						}
+						v.label.SetGeometry2(getX(0), y, v.label.Width(), v.label.Height())
+					}
+				}
+				keyboardListenerInstance.blurLabels.locker.Unlock()
+
+				keyboardListenerInstance.activeLabel = keyboardListenerInstance.labels.Get().(*widgets.QLabel)
 			} else {
 				win.Show()
-				keyboardListenerInstance.globalLabel.Show()
-			}
-			keyboardListenerInstance.globalLabel.SetText(keyboardListenerInstance.keyStringBuf.String())
+				if keyboardListenerInstance.keyStringBuf.Len() == 0 {
+					keyboardListenerInstance.activeLabel.Hide()
+				} else {
+					keyboardListenerInstance.activeLabel.Show()
+					keyboardListenerInstance.activeLabel.SetText(keyboardListenerInstance.keyStringBuf.String())
 
-			keyboardListenerInstance.globalLabel.AdjustSize()
-			w := keyboardListenerInstance.globalLabel.Width()
-			h := keyboardListenerInstance.globalLabel.Height()
-			if w == prevWidth && h == prevHeight {
-				return
+					keyboardListenerInstance.activeLabel.AdjustSize()
+					w := keyboardListenerInstance.activeLabel.Width()
+					h := keyboardListenerInstance.activeLabel.Height()
+					if w == prevWidth && h == prevHeight {
+						return
+					}
+					prevWidth, prevHeight = w, h
+					win.SetFixedSize2(w, h)
+				}
 			}
-			prevWidth, prevHeight = w, h
-			win.SetFixedSize2(w, h)
-			//fmt.Println(getX(w), y, w, h)
-			//win.SetGeometry2(getX(w), y, w, h)
 		})
 		timer.SetInterval(50)
 		timer.Start2()

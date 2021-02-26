@@ -1,9 +1,9 @@
 {
-  "sound_type": "drum",
+  "sound_type": "bubble",
   "style": "color: #fff; border: 2px solid #fff; border-radius: 0px; background: rgba(0,0,0,0.4); font-size: 30px;",
   "pos": [
     15,
-    -35
+    -50
   ],
-  "delay": 2000
+  "delay": 1000
 }

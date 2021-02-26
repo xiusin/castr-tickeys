@@ -49,7 +49,6 @@ func InitStreamer() struct {
 	Modifiers map[string][]byte
 } {
 	soundDir := helper.AppDirPath("../Resources/sounds/" + sound.Name)
-	//soundDir := "/Users/xiusin/projects/src/github.com/xiusin/castr-tickeys/sounds/" + sound.Name
 	var sounds [][]byte
 	var modifiers = map[string][]byte{}
 	for idx, soundFile := range sound.Files {

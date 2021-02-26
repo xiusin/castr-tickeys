@@ -26,4 +26,4 @@ cp('package.json', 'deploy/darwin/castr-tickeys.app/Contents/Macos/package.json'
 
 println(term.ok_message('构建完成!'))
 
-system('qtdeploy run desktop')
+system('./deploy/darwin/castr-tickeys.app/Contents/MacOS/castr-tickeys')
