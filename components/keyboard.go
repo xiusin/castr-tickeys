@@ -227,15 +227,17 @@ type keyBoardListener struct {
 	sync.Once
 	keyCodeMapKeyChar map[uint16]string
 	keyStringBuf      strings.Builder
-	labels            sync.Pool
+	initLabel         func(bool) *widgets.QLabel
 	blurLabels        struct {
 		labels []*struct {
 			timer *time.Timer
 			label *widgets.QLabel
 		}
 		locker sync.RWMutex
-	} // 失去焦点的节点,隐藏以后丢入labels,并删除元素
+	}                           // 失去焦点的节点,隐藏以后丢入labels,并删除元素
 	activeLabel *widgets.QLabel // 当前激活的label
+	spLabel     *widgets.QLabel // 当前激活的label
+	isCp        bool
 }
 
 var keyboardListenerInstance = &keyBoardListener{}
@@ -271,14 +273,15 @@ func InitKeyboard(app *widgets.QApplication) *keyBoardListener { //, win *widget
 					}
 				}
 				label.Hide()
-				label.Close()
-				label.DestroyQLabel()
-				//keyboardListenerInstance.labels.Put(label) // 节点入队
+				label.CloseDefault()
+				label.DestroyQLabelDefault()
 			}
 			keyboardListenerInstance.blurLabels.locker.Unlock()
 		}
-
-		keyboardListenerInstance.labels = sync.Pool{New: func() interface{} {
+		keyboardListenerInstance.initLabel = func(isCp bool) *widgets.QLabel {
+			if isCp && keyboardListenerInstance.spLabel != nil {
+				return keyboardListenerInstance.spLabel
+			}
 			label := widgets.NewQLabel(nil, core.Qt__FramelessWindowHint|core.Qt__WindowStaysOnTopHint)
 
 			// 标签双击事件
@@ -288,13 +291,18 @@ func InitKeyboard(app *widgets.QApplication) *keyBoardListener { //, win *widget
 
 			label.SetScaledContents(true)
 			label.SetStyleSheet("QLabel{ " + helper.GetConf().Style + " }")
-			y := helper.GetConf().Pos[1]
-			if y < 0 {
-				y = app.PrimaryScreen().Size().Height() + y
+			if !isCp {
+				y := helper.GetConf().Pos[1]
+				if y < 0 {
+					y = app.PrimaryScreen().Size().Height() + y
+				}
+				label.SetStyleSheet("QLabel{ " + helper.GetConf().Style + " }")
+				label.SetGeometry2(getX(0), y, 0, 0)
+			} else {
+				keyboardListenerInstance.spLabel = label
 			}
-			label.SetGeometry2(getX(0), y, 0, 0)
 			return label
-		}}
+		}
 
 		keyboardListenerInstance.timer = time.AfterFunc(time.Duration(helper.GetConf().Delay)*time.Millisecond, func() {
 			keyboardListenerInstance.Lock()
@@ -306,7 +314,7 @@ func InitKeyboard(app *widgets.QApplication) *keyBoardListener { //, win *widget
 		win.SetVisible(true)
 		win.SetAttribute(core.Qt__WA_TranslucentBackground, true)
 		win.SetAutoFillBackground(false)
-		keyboardListenerInstance.activeLabel = keyboardListenerInstance.labels.Get().(*widgets.QLabel)
+		keyboardListenerInstance.activeLabel = keyboardListenerInstance.initLabel(false)
 		for s, v := range hook.Keycode {
 			keyboardListenerInstance.keyCodeMapKeyChar[v] = s
 		}
@@ -314,13 +322,14 @@ func InitKeyboard(app *widgets.QApplication) *keyBoardListener { //, win *widget
 		go func() {
 			s := hook.Start()
 			for ev := range s {
-				if ev.Kind == hook.MouseMove {
+				if strings.Contains(ev.String(), "Mouse") {
 					continue
 				}
+				fmt.Println(ev)
 				var kc string
 				var code int
 				soundData, ok := streams.Modifiers[strconv.Itoa(int(ev.Rawcode))]
-				if ev.Keychar != math.MaxInt16 {
+				if ev.Keychar != math.MaxUint16 {
 					code = int(ev.Keychar)
 					kc = string(ev.Keychar)
 				} else {
@@ -330,17 +339,25 @@ func InitKeyboard(app *widgets.QApplication) *keyBoardListener { //, win *widget
 				if !ok {
 					soundData = streams.Sounds[(code % sound.GetSoundConf().NonUniqueCount)]
 				}
+				if ev.Rawcode == 57 {
+					if ev.Kind == hook.KeyUp || ev.Kind == hook.KeyHold {
+						keyboardListenerInstance.Lock()
+						keyboardListenerInstance.initLabel(true)
+						keyboardListenerInstance.Unlock()
+					}
+					keyboardListenerInstance.isCp = true
+					continue
+				}
 				if ev.Kind == hook.KeyUp {
 					delete(keyboardListenerInstance.ModifierMapping, kc)
 				} else if ev.Kind == hook.KeyHold { // ev.Kind == hook.KeyHold || 修饰键用keyHold
-					fmt.Println(ev)
 					func(keyChar string) {
 						keyboardListenerInstance.Lock()
 						defer keyboardListenerInstance.Unlock()
 						go func() {
 							p := streams.Ctx.NewPlayer()
-							p.Write(soundData)
-							p.Close()
+							_, _ = p.Write(soundData)
+							_ = p.Close()
 						}()
 						keyboardListenerInstance.prevEnterTime[keyChar] = time.Now()
 						if len(keyChar) > 1 {
@@ -366,6 +383,18 @@ func InitKeyboard(app *widgets.QApplication) *keyBoardListener { //, win *widget
 		var prevWidth, prevHeight int
 
 		timer.ConnectTimeout(func() {
+			if keyboardListenerInstance.isCp {
+				label := keyboardListenerInstance.initLabel(true)
+				keyboardListenerInstance.isCp = false
+				label.SetStyleSheet("QLabel{ color: #fff; border-radius: 8px; background: rgba(0,0,0,0.4); font-size: 48px; }")
+				w, h := 220, 100
+				cw := (app.PrimaryScreen().Size().Width() - w) / 2
+				ch := (app.PrimaryScreen().Size().Height() - h) / 2
+				label.SetGeometry2(cw, ch, w, h)
+				label.SetText("OFF")
+				label.Show()
+			}
+
 			if keyboardListenerInstance.keyStringBuf.Len() == 0 && len(keyboardListenerInstance.prevEnterTime) > 0 {
 				keyboardListenerInstance.prevEnterTime = map[string]time.Time{}
 				keyboardListenerInstance.blurLabels.locker.Lock()
@@ -407,7 +436,7 @@ func InitKeyboard(app *widgets.QApplication) *keyBoardListener { //, win *widget
 				}
 				keyboardListenerInstance.blurLabels.locker.Unlock()
 
-				keyboardListenerInstance.activeLabel = keyboardListenerInstance.labels.Get().(*widgets.QLabel)
+				keyboardListenerInstance.activeLabel = keyboardListenerInstance.initLabel(false)
 			} else {
 				win.Show()
 				if keyboardListenerInstance.keyStringBuf.Len() == 0 {

@@ -8,6 +8,10 @@ println(term.ok_message('开始打包应用'))
 
 system('qtdeploy build desktop')
 
+println(term.ok_message('压缩执行文件'))
+
+// system('upx -9 deploy/darwin/castr-tickeys.app/Contents/MacOS/castr-tickeys')
+
 mkdir('deploy/darwin/castr-tickeys.app/Contents/Resources/sounds') or {
 	println('sounds: ${term.fail_message(err)}')
 	return
@@ -23,6 +27,7 @@ cp('package.json', 'deploy/darwin/castr-tickeys.app/Contents/Macos/package.json'
 	return
 }
 
+cp('castr-tickeys.icns', 'deploy/darwin/castr-tickeys.app/Contents/Resources/castr-tickeys.icns') ?
 
 println(term.ok_message('构建完成!'))
 
