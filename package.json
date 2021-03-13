@@ -1,6 +1,6 @@
 {
   "sound_type": "bubble",
-  "style": "color: #fff; border: 2px solid #fff; border-radius: 0px; background: rgba(0,0,0,0.4); font-size: 30px;",
+  "style": "color: #fff; border-radius: 0px; background: rgba(0,0,0,0.4); font-size: 30px;",
   "pos": [
     15,
     -50

@@ -234,10 +234,11 @@ type keyBoardListener struct {
 			label *widgets.QLabel
 		}
 		locker sync.RWMutex
-	}                           // 失去焦点的节点,隐藏以后丢入labels,并删除元素
-	activeLabel *widgets.QLabel // 当前激活的label
-	spLabel     *widgets.QLabel // 当前激活的label
-	isCp        bool
+	} // 失去焦点的节点,隐藏以后丢入labels,并删除元素
+	activeLabel  *widgets.QLabel // 当前激活的label
+	spLabel      *widgets.QLabel // 当前激活的label
+	cpStr        string
+	cpCloseEvent *time.Timer
 }
 
 var keyboardListenerInstance = &keyBoardListener{}
@@ -279,19 +280,21 @@ func InitKeyboard(app *widgets.QApplication) *keyBoardListener { //, win *widget
 			keyboardListenerInstance.blurLabels.locker.Unlock()
 		}
 		keyboardListenerInstance.initLabel = func(isCp bool) *widgets.QLabel {
+
 			if isCp && keyboardListenerInstance.spLabel != nil {
-				return keyboardListenerInstance.spLabel
+				//keyboardListenerInstance.Lock()
+				resetQLabel(keyboardListenerInstance.spLabel)
+				keyboardListenerInstance.spLabel = nil
+				//keyboardListenerInstance.Unlock()
 			}
+
 			label := widgets.NewQLabel(nil, core.Qt__FramelessWindowHint|core.Qt__WindowStaysOnTopHint)
-
-			// 标签双击事件
-			label.ConnectMouseDoubleClickEvent(func(event *gui.QMouseEvent) {
-				resetQLabel(label)
-			})
-
 			label.SetScaledContents(true)
-			label.SetStyleSheet("QLabel{ " + helper.GetConf().Style + " }")
 			if !isCp {
+				// 标签双击事件
+				label.ConnectMouseDoubleClickEvent(func(event *gui.QMouseEvent) {
+					resetQLabel(label)
+				})
 				y := helper.GetConf().Pos[1]
 				if y < 0 {
 					y = app.PrimaryScreen().Size().Height() + y
@@ -300,6 +303,12 @@ func InitKeyboard(app *widgets.QApplication) *keyBoardListener { //, win *widget
 				label.SetGeometry2(getX(0), y, 0, 0)
 			} else {
 				keyboardListenerInstance.spLabel = label
+				label.SetAttribute(core.Qt__WA_TranslucentBackground, true)
+				keyboardListenerInstance.spLabel.SetStyleSheet("QLabel{ color: #000; border-radius: 8px; background: rgba(0,0,0,0.4); font-size: 68px; }")
+				w, h := 220, 100
+				cw := (app.PrimaryScreen().Size().Width() - w) / 2
+				ch := (app.PrimaryScreen().Size().Height() - h) / 2
+				keyboardListenerInstance.spLabel.SetGeometry2(cw, ch, w, h)
 			}
 			return label
 		}
@@ -341,16 +350,29 @@ func InitKeyboard(app *widgets.QApplication) *keyBoardListener { //, win *widget
 				}
 				if ev.Rawcode == 57 {
 					if ev.Kind == hook.KeyUp || ev.Kind == hook.KeyHold {
-						keyboardListenerInstance.Lock()
-						keyboardListenerInstance.initLabel(true)
-						keyboardListenerInstance.Unlock()
+						if ev.Kind == hook.KeyHold {
+							keyboardListenerInstance.cpStr = "⇪   ON"
+						} else {
+							keyboardListenerInstance.cpStr = "⇪  OFF"
+						}
 					}
-					keyboardListenerInstance.isCp = true
+					continue
+				} else if ev.Rawcode == 51 {
+					keyboardListenerInstance.timer.Reset(time.Duration(helper.GetConf().Delay) * time.Millisecond)
+					// 删减
+					byts := []byte(keyboardListenerInstance.keyStringBuf.String())
+					if len(byts) == 0 {
+						keyboardListenerInstance.keyStringBuf.Reset()
+					} else {
+						keyboardListenerInstance.keyStringBuf.Reset()
+						byts = byts[:len(byts)-1]
+						keyboardListenerInstance.keyStringBuf.Write(byts)
+					}
 					continue
 				}
 				if ev.Kind == hook.KeyUp {
 					delete(keyboardListenerInstance.ModifierMapping, kc)
-				} else if ev.Kind == hook.KeyHold { // ev.Kind == hook.KeyHold || 修饰键用keyHold
+				} else if ev.Kind == hook.KeyHold {
 					func(keyChar string) {
 						keyboardListenerInstance.Lock()
 						defer keyboardListenerInstance.Unlock()
@@ -382,17 +404,18 @@ func InitKeyboard(app *widgets.QApplication) *keyBoardListener { //, win *widget
 
 		var prevWidth, prevHeight int
 
-		timer.ConnectTimeout(func() {
-			if keyboardListenerInstance.isCp {
+		timer.ConnectTimeout(func() { // QT只允许在主线程内操作组件显示隐藏
+			if len(keyboardListenerInstance.cpStr) > 0 {
 				label := keyboardListenerInstance.initLabel(true)
-				keyboardListenerInstance.isCp = false
-				label.SetStyleSheet("QLabel{ color: #fff; border-radius: 8px; background: rgba(0,0,0,0.4); font-size: 48px; }")
-				w, h := 220, 100
-				cw := (app.PrimaryScreen().Size().Width() - w) / 2
-				ch := (app.PrimaryScreen().Size().Height() - h) / 2
-				label.SetGeometry2(cw, ch, w, h)
-				label.SetText("OFF")
+				label.SetText(keyboardListenerInstance.cpStr)
+				label.AdjustSize()
+				win.SetFixedSize2(label.Geometry().Width(), label.Geometry().Height())
+				keyboardListenerInstance.cpStr = ""
+				keyboardListenerInstance.cpCloseEvent = time.AfterFunc(time.Second*2, func() {
+					resetQLabel(label)
+				})
 				label.Show()
+				return
 			}
 
 			if keyboardListenerInstance.keyStringBuf.Len() == 0 && len(keyboardListenerInstance.prevEnterTime) > 0 {
